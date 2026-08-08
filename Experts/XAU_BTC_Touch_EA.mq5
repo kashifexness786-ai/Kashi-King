@@ -4,7 +4,7 @@
 //|  immediate touch entries, continuous sequences, reverse logic.   |
 //+------------------------------------------------------------------+
 #property copyright "Generated"
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -65,9 +65,9 @@ int OnInit()
    stXAU.state = SEQ_IDLE; stXAU.candle_time = 0; stXAU.sequence_end = 0; stXAU.last_deal_ticket = 0; stXAU.candle_open = 0.0; stXAU.last_sl = 0.0; stXAU.last_tp = 0.0; stXAU.active = false;
    stBTC.state = SEQ_IDLE; stBTC.candle_time = 0; stBTC.sequence_end = 0; stBTC.last_deal_ticket = 0; stBTC.candle_open = 0.0; stBTC.last_sl = 0.0; stBTC.last_tp = 0.0; stBTC.active = false;
 
-   if(symXAU!="") PrintFormat("Detected XAU symbol: %s", symXAU);
-   if(symBTC!="") PrintFormat("Detected BTC symbol: %s", symBTC);
-   if(symXAU=="" && symBTC=="")
+   if(StringLen(symXAU)>0) PrintFormat("Detected XAU symbol: %s", symXAU);
+   if(StringLen(symBTC)>0) PrintFormat("Detected BTC symbol: %s", symBTC);
+   if(StringLen(symXAU)==0 && StringLen(symBTC)==0)
       Print("WARNING: No XAU or BTC symbols detected at init; EA will keep scanning until symbols are available.");
 
    return(INIT_SUCCEEDED);
@@ -85,7 +85,7 @@ void OnDeinit(const int reason)
 void DetectSymbols()
 {
    // If both found, nothing to do
-   if(symXAU!="" && symBTC!="") return;
+   if(StringLen(symXAU)>0 && StringLen(symBTC)>0) return;
 
    int total = SymbolsTotal(false);
    for(int i=0;i<total;i++)
@@ -93,12 +93,14 @@ void DetectSymbols()
       string s = SymbolName(i,false);
       string up = StringToUpper(s);
       // detect XAU/GOLD
-      if(symXAU=="")
+      if(StringLen(symXAU)==0)
       {
          if(StringFind(up,"XAU")>=0 || StringFind(up,"GOLD")>=0)
          {
             // ensure symbol is selected for market info
-            if(SymbolSelect(s,true) || (SymbolInfoInteger(s,SYMBOL_SELECT) != 0))
+            bool sel = SymbolSelect(s,true);
+            long sel_flag = SymbolInfoInteger(s,SYMBOL_SELECT);
+            if(sel || (sel_flag != 0))
             {
                symXAU = s;
                PrintFormat("Auto-detected XAU: %s", s);
@@ -106,18 +108,20 @@ void DetectSymbols()
          }
       }
       // detect BTC
-      if(symBTC=="")
+      if(StringLen(symBTC)==0)
       {
          if(StringFind(up,"BTC")>=0 || StringFind(up,"XBT")>=0)
          {
-            if(SymbolSelect(s,true) || (SymbolInfoInteger(s,SYMBOL_SELECT) != 0))
+            bool sel2 = SymbolSelect(s,true);
+            long sel2_flag = SymbolInfoInteger(s,SYMBOL_SELECT);
+            if(sel2 || (sel2_flag != 0))
             {
                symBTC = s;
                PrintFormat("Auto-detected BTC: %s", s);
             }
          }
       }
-      if(symXAU!="" && symBTC!="") break;
+      if(StringLen(symXAU)>0 && StringLen(symBTC)>0) break;
    }
 }
 
@@ -152,10 +156,10 @@ void OnTick()
    tickCount++;
    if(tickCount % 1500 == 0) DetectSymbols(); // periodic re-detect
 
-   if(InpEnableXAU && symXAU != "")
+   if(InpEnableXAU && StringLen(symXAU) > 0)
       ProcessSymbol(symXAU, stXAU);
 
-   if(InpEnableBTC && symBTC != "")
+   if(InpEnableBTC && StringLen(symBTC) > 0)
       ProcessSymbol(symBTC, stBTC);
 }
 
@@ -222,17 +226,17 @@ void TriggerReverseSequence(const string symbol, Sequence &seq, SeqState startSt
 //+------------------------------------------------------------------+
 void ProcessSymbol(const string symbol, Sequence &seq)
 {
-   if(!SymbolInfoInteger(symbol, SYMBOL_SELECT))
+   long selected = SymbolInfoInteger(symbol, SYMBOL_SELECT);
+   if(selected == 0)
       SymbolSelect(symbol, true);
 
    // spread check (in points)
-   double spread = SymbolInfoDouble(symbol, SYMBOL_SPREAD);
-   if(spread <= 0)
+   double spread = 0.0;
+   if(!SymbolInfoDouble(symbol, SYMBOL_SPREAD, spread))
    {
-      double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-      double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-      if(ask<=0 || bid<=0) return;
-      double sym_point=0.0; SymbolInfoDouble(symbol, SYMBOL_POINT, sym_point);
+      double ask = 0.0, bid = 0.0, sym_point = 0.0;
+      if(!SymbolInfoDouble(symbol, SYMBOL_ASK, ask) || !SymbolInfoDouble(symbol, SYMBOL_BID, bid) || !SymbolInfoDouble(symbol, SYMBOL_POINT, sym_point))
+         return;
       spread = (ask - bid) / sym_point;
    }
    if(spread > InpMaxSpreadPoints)
@@ -252,11 +256,11 @@ void ProcessSymbol(const string symbol, Sequence &seq)
    double low1  = iLow(symbol, PERIOD_M5, 1);
    double high1 = iHigh(symbol, PERIOD_M5, 1);
 
-   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-   if(bid<=0 || ask<=0) return;
+   double bid = 0.0, ask = 0.0;
+   if(!SymbolInfoDouble(symbol, SYMBOL_BID, bid) || !SymbolInfoDouble(symbol, SYMBOL_ASK, ask)) return;
 
    double pip = PipSize(symbol);
+   if(pip<=0) return;
 
    // SELL detection: previous candle bullish, current moved down and touched/broke previous low
    bool prevBullish = (close1 > open1);
@@ -264,7 +268,7 @@ void ProcessSymbol(const string symbol, Sequence &seq)
    double sym_point=0.0; SymbolInfoDouble(symbol, SYMBOL_POINT, sym_point);
    bool touchedPrevLow = (low0 <= low1 + sym_point*0.5);
 
-   ulong pos_ticket; long pos_type;
+   ulong pos_ticket = 0; long pos_type = -1;
    bool hasPos = HasOpenPosition(symbol, InpMagicNumber, pos_ticket, pos_type);
 
    if(prevBullish && currentMovedBelowOpen && touchedPrevLow)
@@ -272,10 +276,8 @@ void ProcessSymbol(const string symbol, Sequence &seq)
       if(!hasPos)
       {
          double sl = high0;
-         double tp = 0.0;
-         // for SELL, TP is below entry by InpTakeProfit price units
-         double entry_price = SymbolInfoDouble(symbol, SYMBOL_BID);
-         tp = entry_price - InpTakeProfit;
+         double entry_price = bid;
+         double tp = entry_price - InpTakeProfit;
          if(ExecuteSell(symbol, InpLotSize, sl, tp))
          {
             seq.state = SEQ_SELL;
@@ -297,7 +299,7 @@ void ProcessSymbol(const string symbol, Sequence &seq)
    if(buyCondition && !hasPos)
    {
       double sl = low0;
-      double entry_price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      double entry_price = ask;
       double tp = entry_price + InpTakeProfit;
       if(ExecuteBuy(symbol, InpLotSize, sl, tp))
       {
@@ -330,7 +332,8 @@ void ProcessSymbol(const string symbol, Sequence &seq)
             if(seq.state == SEQ_BUY)
             {
                double sl = iLow(symbol, PERIOD_M5, 0);
-               double entry_price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+               double entry_price = 0.0;
+               if(!SymbolInfoDouble(symbol, SYMBOL_ASK, entry_price)) return;
                double tp = entry_price + InpTakeProfit;
                if(ExecuteBuy(symbol, InpLotSize, sl, tp))
                {
@@ -341,7 +344,8 @@ void ProcessSymbol(const string symbol, Sequence &seq)
             else if(seq.state == SEQ_SELL)
             {
                double sl = iHigh(symbol, PERIOD_M5, 0);
-               double entry_price = SymbolInfoDouble(symbol, SYMBOL_BID);
+               double entry_price = 0.0;
+               if(!SymbolInfoDouble(symbol, SYMBOL_BID, entry_price)) return;
                double tp = entry_price - InpTakeProfit;
                if(ExecuteSell(symbol, InpLotSize, sl, tp))
                {
@@ -362,10 +366,12 @@ bool ExecuteBuy(const string symbol, double lot, double sl, double tp)
    bool ok = false;
    for(int attempt=1; attempt<=InpRetryCount; attempt++)
    {
-      ok = trade.Buy(lot, symbol, SymbolInfoDouble(symbol,SYMBOL_ASK), sl, tp, NULL);
+      double ask=0.0;
+      if(!SymbolInfoDouble(symbol,SYMBOL_ASK,ask)) return false;
+      ok = trade.Buy(lot, symbol, ask, sl, tp, NULL);
       if(ok)
       {
-         PrintFormat("Buy order placed on %s lot=%.2f price=%.8f sl=%.8f tp=%.8f attempt=%d", symbol, lot, SymbolInfoDouble(symbol,SYMBOL_ASK), sl, tp, attempt);
+         PrintFormat("Buy order placed on %s lot=%.2f price=%.8f sl=%.8f tp=%.8f attempt=%d", symbol, lot, ask, sl, tp, attempt);
          return true;
       }
       else
@@ -388,10 +394,12 @@ bool ExecuteSell(const string symbol, double lot, double sl, double tp)
    bool ok = false;
    for(int attempt=1; attempt<=InpRetryCount; attempt++)
    {
-      ok = trade.Sell(lot, symbol, SymbolInfoDouble(symbol,SYMBOL_BID), sl, tp, NULL);
+      double bid=0.0;
+      if(!SymbolInfoDouble(symbol,SYMBOL_BID,bid)) return false;
+      ok = trade.Sell(lot, symbol, bid, sl, tp, NULL);
       if(ok)
       {
-         PrintFormat("Sell order placed on %s lot=%.2f price=%.8f sl=%.8f tp=%.8f attempt=%d", symbol, lot, SymbolInfoDouble(symbol,SYMBOL_BID), sl, tp, attempt);
+         PrintFormat("Sell order placed on %s lot=%.2f price=%.8f sl=%.8f tp=%.8f attempt=%d", symbol, lot, bid, sl, tp, attempt);
          return true;
       }
       else
