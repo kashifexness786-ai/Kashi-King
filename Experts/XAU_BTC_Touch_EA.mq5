@@ -4,7 +4,7 @@
 //|  immediate touch entries, continuous sequences, reverse logic.   |
 //+------------------------------------------------------------------+
 #property copyright "Generated"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -48,7 +48,8 @@ Sequence stXAU, stBTC;
 //+------------------------------------------------------------------+
 double PipSize(const string symbol)
 {
-   double pt = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double pt=0.0;
+   if(!SymbolInfoDouble(symbol, SYMBOL_POINT, pt)) return(0.0);
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    if(digits > 3) return pt * 10.0; // pip = 10 * point for 4/5-digit style
    return pt;
@@ -60,9 +61,9 @@ int OnInit()
    Print("XAU_BTC_Touch_EA initializing...");
    DetectSymbols();
 
-   // initialize sequences
-   stXAU = {SEQ_IDLE,0,0,0,0,0,0,false};
-   stBTC = {SEQ_IDLE,0,0,0,0,0,0,false};
+   // initialize sequences (assign fields explicitly)
+   stXAU.state = SEQ_IDLE; stXAU.candle_time = 0; stXAU.sequence_end = 0; stXAU.last_deal_ticket = 0; stXAU.candle_open = 0.0; stXAU.last_sl = 0.0; stXAU.last_tp = 0.0; stXAU.active = false;
+   stBTC.state = SEQ_IDLE; stBTC.candle_time = 0; stBTC.sequence_end = 0; stBTC.last_deal_ticket = 0; stBTC.candle_open = 0.0; stBTC.last_sl = 0.0; stBTC.last_tp = 0.0; stBTC.active = false;
 
    if(symXAU!="") PrintFormat("Detected XAU symbol: %s", symXAU);
    if(symBTC!="") PrintFormat("Detected BTC symbol: %s", symBTC);
@@ -96,7 +97,8 @@ void DetectSymbols()
       {
          if(StringFind(up,"XAU")>=0 || StringFind(up,"GOLD")>=0)
          {
-            if(SymbolSelect(s,true) || SymbolInfoInteger(s,SYMBOL_SELECT))
+            // ensure symbol is selected for market info
+            if(SymbolSelect(s,true) || (SymbolInfoInteger(s,SYMBOL_SELECT) != 0))
             {
                symXAU = s;
                PrintFormat("Auto-detected XAU: %s", s);
@@ -108,7 +110,7 @@ void DetectSymbols()
       {
          if(StringFind(up,"BTC")>=0 || StringFind(up,"XBT")>=0)
          {
-            if(SymbolSelect(s,true) || SymbolInfoInteger(s,SYMBOL_SELECT))
+            if(SymbolSelect(s,true) || (SymbolInfoInteger(s,SYMBOL_SELECT) != 0))
             {
                symBTC = s;
                PrintFormat("Auto-detected BTC: %s", s);
@@ -122,23 +124,23 @@ void DetectSymbols()
 //+------------------------------------------------------------------+
 //| Check whether there's already an open position for symbol+magic  |
 //+------------------------------------------------------------------+
-bool HasOpenPosition(const string symbol, const ulong magic, int &pos_index, long &position_type)
+bool HasOpenPosition(const string symbol, const ulong magic, ulong &position_ticket, long &position_type)
 {
-   pos_index = -1;
+   position_ticket = 0;
    position_type = -1;
    int total = PositionsTotal();
-   for(int i=0;i<total;i++)
+   for(int idx=0; idx<total; idx++)
    {
-      if(PositionSelectByIndex(i))
-      {
-         string psym = PositionGetString(POSITION_SYMBOL);
-         if(psym != symbol) continue;
-         long pmag = PositionGetInteger(POSITION_MAGIC);
-         if((ulong)pmag != magic) continue;
-         pos_index = i;
-         position_type = (int)PositionGetInteger(POSITION_TYPE); // POSITION_TYPE_BUY / SELL
-         return true;
-      }
+      ulong ticket = PositionGetTicket(idx);
+      if(ticket==0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      string psym = PositionGetString(POSITION_SYMBOL);
+      if(psym != symbol) continue;
+      long pmag = PositionGetInteger(POSITION_MAGIC);
+      if((ulong)pmag != magic) continue;
+      position_ticket = ticket;
+      position_type = (int)PositionGetInteger(POSITION_TYPE);
+      return true;
    }
    return false;
 }
@@ -162,19 +164,18 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction &trans,const MqlTradeRequest &request,const MqlTradeResult &result)
 {
-   // Listen for added deals (both entry and exit deals appear as DEAL_ADD transactions)
+   // Reply only to DEAL_ADD transactions
    if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
    {
       ulong deal_ticket = trans.deal;
       if(deal_ticket == 0) return;
-      // get properties from history for this deal ticket
-      long deal_magic = (long)HistoryDealGetInteger(deal_ticket, DEAL_MAGIC);
+      long deal_magic = (long)HistoryDealGetInteger((ulong)deal_ticket, DEAL_MAGIC);
       if((ulong)deal_magic != InpMagicNumber) return; // ignore other EA trades
 
-      string d_symbol = HistoryDealGetString(deal_ticket, DEAL_SYMBOL);
-      int    d_entry  = (int)HistoryDealGetInteger(deal_ticket, DEAL_ENTRY); // DEAL_ENTRY_IN/OUT
-      double d_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT);
-      int    d_type   = (int)HistoryDealGetInteger(deal_ticket, DEAL_TYPE);  // BUY/SELL
+      string d_symbol = HistoryDealGetString((ulong)deal_ticket, DEAL_SYMBOL);
+      int    d_entry  = (int)HistoryDealGetInteger((ulong)deal_ticket, DEAL_ENTRY); // DEAL_ENTRY_IN/OUT
+      double d_profit = HistoryDealGetDouble((ulong)deal_ticket, DEAL_PROFIT);
+      int    d_type   = (int)HistoryDealGetInteger((ulong)deal_ticket, DEAL_TYPE);  // BUY/SELL
 
       PrintFormat("OnTradeTransaction: deal=%u sym=%s entry=%d type=%d profit=%.8f", deal_ticket, d_symbol, d_entry, d_type, d_profit);
 
@@ -231,7 +232,8 @@ void ProcessSymbol(const string symbol, Sequence &seq)
       double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
       double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
       if(ask<=0 || bid<=0) return;
-      spread = (ask - bid) / SymbolInfoDouble(symbol, SYMBOL_POINT);
+      double sym_point=0.0; SymbolInfoDouble(symbol, SYMBOL_POINT, sym_point);
+      spread = (ask - bid) / sym_point;
    }
    if(spread > InpMaxSpreadPoints)
    {
@@ -259,10 +261,11 @@ void ProcessSymbol(const string symbol, Sequence &seq)
    // SELL detection: previous candle bullish, current moved down and touched/broke previous low
    bool prevBullish = (close1 > open1);
    bool currentMovedBelowOpen = (bid < open0);
-   bool touchedPrevLow = (low0 <= low1 + SymbolInfoDouble(symbol,SYMBOL_POINT)*0.5);
+   double sym_point=0.0; SymbolInfoDouble(symbol, SYMBOL_POINT, sym_point);
+   bool touchedPrevLow = (low0 <= low1 + sym_point*0.5);
 
-   int pos_idx; long pos_type;
-   bool hasPos = HasOpenPosition(symbol, InpMagicNumber, pos_idx, pos_type);
+   ulong pos_ticket; long pos_type;
+   bool hasPos = HasOpenPosition(symbol, InpMagicNumber, pos_ticket, pos_type);
 
    if(prevBullish && currentMovedBelowOpen && touchedPrevLow)
    {
@@ -321,7 +324,7 @@ void ProcessSymbol(const string symbol, Sequence &seq)
       else
       {
          // if no position open, reopen same-side
-         hasPos = HasOpenPosition(symbol, InpMagicNumber, pos_idx, pos_type);
+         hasPos = HasOpenPosition(symbol, InpMagicNumber, pos_ticket, pos_type);
          if(!hasPos)
          {
             if(seq.state == SEQ_BUY)
