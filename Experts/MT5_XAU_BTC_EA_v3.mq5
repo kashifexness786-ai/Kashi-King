@@ -3,7 +3,7 @@
 //|  Robust, compile-clean Expert Advisor for MT5 (XAU & BTC touch)  |
 //+------------------------------------------------------------------+
 #property copyright "Generated"
-#property version   "1.10"
+#property version   "1.11"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -48,7 +48,8 @@ bool SafeSymbolSelect(const string name)
   return (res || (flag != 0));
 }
 
-bool GetSymbolDouble(const string sym, const int prop, double &out)
+// Use the correct enum type for property to avoid overload ambiguity
+bool GetSymbolDouble(const string sym, const ENUM_SYMBOL_INFO_DOUBLE prop, double &out)
 {
   return SymbolInfoDouble(sym, prop, out);
 }
@@ -91,7 +92,8 @@ void DetectSymbols()
   for(int i=0;i<total;i++)
   {
     string s = SymbolName(i, false);
-    string up = StringToUpper(s);
+    string up = s;
+    StringToUpper(up);
     if(StringLen(SymXAU)==0)
     {
       if(StringFind(up, "XAU")>=0 || StringFind(up, "GOLD")>=0)
